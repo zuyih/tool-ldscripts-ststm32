@@ -1,6 +1,6 @@
 {
   "name": "tool-ldscripts-ststm32",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Linker scripts pack for STMicroelectronics STM32 platform",
   "keywords": [
     "linker scripts",
