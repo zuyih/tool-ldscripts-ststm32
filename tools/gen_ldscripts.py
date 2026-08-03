@@ -11,7 +11,8 @@ directory does not exist yet.
 the classic STM32Cube firmware packages, with the normalisations this package
 applies to all of them: no ``READONLY`` output section type, 8-digit flash
 ORIGIN, ``KBytes`` spelling, a blank line after ``SECTIONS {`` and the generic
-``@brief`` header instead of the board-specific ``Abstract`` one.
+``@brief`` header instead of the board-specific ``Abstract`` one.  The HAL2
+families keep the layout of their device family package instead, verbatim.
 
 Data sources:
 
@@ -36,7 +37,7 @@ Data sources:
 
 Usage:
 
-    tools/gen_ldscripts.py stm32h5 stm32n6 stm32u0 stm32u3
+    tools/gen_ldscripts.py stm32c5 stm32h5 stm32n6 stm32u0 stm32u3
     tools/gen_ldscripts.py --dry-run stm32h5
     tools/gen_ldscripts.py --targets /path/to/stm32targets.xml stm32u3
 """
@@ -70,6 +71,10 @@ K = 1024
 #
 # "cubeide"   <part>, one script per part number, the layout STM32CubeIDE
 #             generates.  Read by the `stm32cube` framework of platform-ststm32.
+# "dfp"       <sub-family>X<flash letter>, the layout of the device family
+#             packages, so one script serves every package and temperature
+#             range of a density.  Read by the `stm32cube2` framework, which
+#             builds that name from the board MCU itself.
 # "prefix11"  the first 11 characters of the part number, for a family whose
 #             part numbers past them say nothing about the memory.
 #
@@ -89,6 +94,7 @@ Family = collections.namedtuple(
 )
 
 FAMILIES = {
+    "stm32c5": Family("stm32c5.ld", "dfp"),
     "stm32h5": Family("default.ld", "cubeide", stack_limit=True),
     # No internal flash at all: the template is ST's load-and-run script, which
     # runs the whole image out of AXISRAM, and already carries _sstack.
@@ -253,6 +259,17 @@ def render_device(template, part):
     return string.Template(template).substitute(device=part[:9].upper())
 
 
+def render_dfp(template, name, flash, regions):
+    memory = ["  ROM (rx) : org = 0x%X, len = 0x%X" % (0x8000000, flash)]
+    memory += [
+        "  %s (%s) : org = 0x%X, len = 0x%X" % (region, attrs, origin, size)
+        for region, attrs, origin, size, _ in regions
+    ]
+    return string.Template(template).substitute(
+        file=name.lower(), memory="\n".join(memory)
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("families", nargs="+", choices=sorted(FAMILIES))
@@ -286,6 +303,12 @@ def main():
                         ram_regions(part, ram_total),
                         conf.stack_limit,
                     ),
+                )]
+            elif conf.style == "dfp":
+                name = "%sX%s%s" % (part[:9].upper(), part[10:11].upper(), conf.suffix)
+                produced = [(
+                    name,
+                    render_dfp(template, name, flash, ram_regions(part, ram_total)),
                 )]
             else:
                 produced = [(
