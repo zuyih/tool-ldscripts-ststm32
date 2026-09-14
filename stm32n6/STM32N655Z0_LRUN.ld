@@ -46,6 +46,7 @@ MEMORY
 {
   ROM    (xrw)    : ORIGIN = 0x34000400,   LENGTH = 511K
   RAM    (xrw)    : ORIGIN = 0x34080000,   LENGTH = 1536K
+  EXTRAM (rw)     : ORIGIN = 0x90000000,   LENGTH = 0x02000000
 }
 
 /* Sections */
@@ -190,6 +191,19 @@ SECTIONS
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
   } >RAM
+
+  /* Data placed in the external RAM mapped on XSPI1 through
+     __attribute__((section(".EXTRAM"))), typically LTDC/DMA2D framebuffers.
+     NOLOAD keeps the contents out of the image and out of the startup copy and
+     zero-init loops, so the external memory must be mapped before first access.
+     When no object contributes a .EXTRAM input section the output section stays
+     empty and the linker drops it, leaving builds without external RAM as they
+     were. */
+  .extram (NOLOAD) :
+  {
+    *(.EXTRAM)
+    *(.EXTRAM*)
+  } >EXTRAM
 
   /* Remove information from the compiler libraries */
   /DISCARD/ :
