@@ -37,7 +37,7 @@ Data sources:
 
 Usage:
 
-    tools/gen_ldscripts.py stm32c5 stm32h5 stm32n6 stm32u0 stm32u3
+    tools/gen_ldscripts.py stm32c5 stm32h5 stm32h7rs stm32n6 stm32u0 stm32u3
     tools/gen_ldscripts.py --dry-run stm32h5
     tools/gen_ldscripts.py --targets /path/to/stm32targets.xml stm32u3
 """
@@ -75,6 +75,9 @@ K = 1024
 #             packages, so one script serves every package and temperature
 #             range of a density.  Read by the `stm32cube2` framework, which
 #             builds that name from the board MCU itself.
+# "subfamily" <part> like "cubeide", but the parts all share one memory
+#             layout, so only the sub-family name of the header comment is
+#             substituted.
 # "prefix11"  the first 11 characters of the part number, for a family whose
 #             part numbers past them say nothing about the memory.
 #
@@ -83,6 +86,10 @@ K = 1024
 # spells out the rest of the sub-family name, ``STM32N647`` ->
 # ``${device}XX``, ``STM32H7R7`` -> ``${device}xx``.
 #
+# ``parent`` is the family key of stm32targets.xml when it is not the name of
+# the directory, and ``prefix`` narrows it down when several families share
+# one: STM32H7RS sits in stm32h7single together with the rest of STM32H7.
+#
 # ``stack_limit`` ("cubeide" only) adds the _sstack symbol.  It is not
 # cosmetic: the Armv8-M startup code of ST loads MSPLIM from it (``ldr r0,
 # =_sstack`` / ``msr MSPLIM, r0`` in startup_stm32h5xx.s and
@@ -90,12 +97,22 @@ K = 1024
 # reference to `_sstack'".  The Cortex-M0+ STM32U0 has no MSPLIM and ST defines
 # no such symbol for it.
 Family = collections.namedtuple(
-    "Family", "template style suffix stack_limit", defaults=("_FLASH.ld", False)
+    "Family",
+    "template style suffix parent prefix stack_limit",
+    defaults=("_FLASH.ld", None, None, False),
 )
 
 FAMILIES = {
     "stm32c5": Family("stm32c5.ld", "dfp"),
     "stm32h5": Family("default.ld", "cubeide", stack_limit=True),
+    # Only 64K of internal flash and a fixed layout across the series, with the
+    # stack in DTCM and a non-cacheable buffer behind the AXISRAM.
+    "stm32h7rs": Family(
+        "stm32h7rs.ld",
+        "subfamily",
+        parent="stm32h7single",
+        prefix=("STM32H7R", "STM32H7S"),
+    ),
     # No internal flash at all: the template is ST's load-and-run script, which
     # runs the whole image out of AXISRAM, and already carries _sstack.
     "stm32n6": Family("stm32n6.ld", "prefix11", suffix="_LRUN.ld"),
@@ -195,9 +212,11 @@ def read_devices(targets_xml, family, conf):
     """Return [(part number, flash bytes, total RAM bytes)] of one family."""
     devices = []
     for mcu in ET.parse(targets_xml).getroot().iter(NS + "mcu"):
-        if text(mcu, "parent") != family:
+        if text(mcu, "parent") != (conf.parent or family):
             continue
         name = text(mcu, "name")
+        if conf.prefix and not name.startswith(conf.prefix):
+            continue
         flash = ram = None
         for memory in mcu.iter(NS + "memory"):
             size = int(text(memory, "size"), 16)
@@ -310,6 +329,10 @@ def main():
                     name,
                     render_dfp(template, name, flash, ram_regions(part, ram_total)),
                 )]
+            elif conf.style == "subfamily":
+                produced = [
+                    (part.upper() + conf.suffix, render_device(template, part))
+                ]
             else:
                 produced = [(
                     part[:11].upper() + conf.suffix,
