@@ -68,13 +68,15 @@ K = 1024
 # ``template`` is the body in tools/templates/ that every script of the family
 # is rendered from.  ``style`` picks how a script is named and rendered:
 #
-# "cubeide"   <part>_FLASH.ld, one per part number, the layout STM32CubeIDE
+# "cubeide"   <part>, one script per part number, the layout STM32CubeIDE
 #             generates.  Read by the `stm32cube` framework of platform-ststm32.
-# "default"   <first 11 characters>_DEFAULT.ld, the name the `stm32cube`
-#             framework falls back to, for a family that has no internal flash
-#             to name a script after.  It substitutes nothing but ``$device``,
-#             the first 9 characters of the part number; the template spells
-#             out the rest, ``STM32N647`` -> ``${device}XX``.
+# "prefix11"  the first 11 characters of the part number, for a family whose
+#             part numbers past them say nothing about the memory.
+#
+# ``suffix`` completes the file name.  The last two styles substitute nothing
+# but ``$device``, the first 9 characters of the part number; the template
+# spells out the rest of the sub-family name, ``STM32N647`` ->
+# ``${device}XX``, ``STM32H7R7`` -> ``${device}xx``.
 #
 # ``stack_limit`` ("cubeide" only) adds the _sstack symbol.  It is not
 # cosmetic: the Armv8-M startup code of ST loads MSPLIM from it (``ldr r0,
@@ -83,14 +85,14 @@ K = 1024
 # reference to `_sstack'".  The Cortex-M0+ STM32U0 has no MSPLIM and ST defines
 # no such symbol for it.
 Family = collections.namedtuple(
-    "Family", "template style stack_limit", defaults=(False,)
+    "Family", "template style suffix stack_limit", defaults=("_FLASH.ld", False)
 )
 
 FAMILIES = {
     "stm32h5": Family("default.ld", "cubeide", stack_limit=True),
-    # No internal flash at all: the template is ST's LRUN script, which runs
-    # the whole image out of AXISRAM, and already carries _sstack.
-    "stm32n6": Family("stm32n6.ld", "default"),
+    # No internal flash at all: the template is ST's load-and-run script, which
+    # runs the whole image out of AXISRAM, and already carries _sstack.
+    "stm32n6": Family("stm32n6.ld", "prefix11", suffix="_LRUN.ld"),
     "stm32u0": Family("default.ld", "cubeide"),
     "stm32u3": Family("default.ld", "cubeide", stack_limit=True),
 }
@@ -197,7 +199,7 @@ def read_devices(targets_xml, family, conf):
                 flash = size if flash is None else max(flash, size)
             else:
                 ram = size if ram is None else ram + size
-        if ram is None or (flash is None and conf.style != "default"):
+        if ram is None or (flash is None and conf.style != "prefix11"):
             sys.exit("%s has no flash or RAM in %s" % (name, targets_xml))
         devices.append((name, flash, ram))
     if not devices:
@@ -268,37 +270,40 @@ def main():
 
     for family in args.families:
         conf = FAMILIES[family]
-        # newline="" keeps the line endings of the template; not every family
-        # uses the same ones and rewriting them would churn the diff.
-        with open(os.path.join(TEMPLATES_DIR, conf.template), newline="") as handle:
+        with open(os.path.join(TEMPLATES_DIR, conf.template)) as handle:
             template = handle.read()
-        eol = "\r\n" if "\r\n" in template else "\n"
-        template = template.replace("\r\n", "\n")
 
         scripts = {}
         for part, flash, ram_total in read_devices(targets_xml, family, conf):
             if conf.style == "cubeide":
-                name = part.upper() + "_FLASH.ld"
-                content = render(
-                    template,
-                    part,
-                    family.upper(),
-                    flash,
-                    ram_regions(part, ram_total),
-                    conf.stack_limit,
-                )
+                produced = [(
+                    part.upper() + conf.suffix,
+                    render(
+                        template,
+                        part,
+                        family.upper(),
+                        flash,
+                        ram_regions(part, ram_total),
+                        conf.stack_limit,
+                    ),
+                )]
             else:
-                name = part[:11].upper() + "_DEFAULT.ld"
-                content = render_device(template, part)
-            if scripts.setdefault(name, content) != content:
-                sys.exit("%s: %s does not match the other parts it covers" % (part, name))
+                produced = [(
+                    part[:11].upper() + conf.suffix,
+                    render_device(template, part),
+                )]
+            for name, content in produced:
+                if scripts.setdefault(name, content) != content:
+                    sys.exit(
+                        "%s: %s does not match the other parts it covers" % (part, name)
+                    )
 
         if not args.dry_run:
             family_dir = os.path.join(args.outdir, family)
             os.makedirs(family_dir, exist_ok=True)
             for name, content in sorted(scripts.items()):
-                with open(os.path.join(family_dir, name), "w", newline="") as handle:
-                    handle.write(content.replace("\n", eol))
+                with open(os.path.join(family_dir, name), "w", newline="\n") as handle:
+                    handle.write(content)
         print(
             "%s: %d script(s)%s"
             % (family, len(scripts), " (dry run)" if args.dry_run else "")
