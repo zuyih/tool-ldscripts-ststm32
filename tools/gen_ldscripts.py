@@ -96,10 +96,16 @@ K = 1024
 # startup_stm32u3xx.s), so a script without it fails to link with "undefined
 # reference to `_sstack'".  The Cortex-M0+ STM32U0 has no MSPLIM and ST defines
 # no such symbol for it.
+#
+# ``variants`` ("subfamily" only) are further scripts of the same parts, as
+# (filename suffix, template) pairs, for a family whose parts can be linked in
+# more than one way: STM32H7RS has one script for the boot stage in the 64K of
+# internal flash and one for an application executing in place out of the
+# external flash.
 Family = collections.namedtuple(
     "Family",
-    "template style suffix parent prefix stack_limit",
-    defaults=("_FLASH.ld", None, None, False),
+    "template style suffix parent prefix stack_limit variants",
+    defaults=("_FLASH.ld", None, None, False, ()),
 )
 
 FAMILIES = {
@@ -112,6 +118,7 @@ FAMILIES = {
         "subfamily",
         parent="stm32h7single",
         prefix=("STM32H7R", "STM32H7S"),
+        variants=(("_ROMXSPI2.ld", "stm32h7rs_romxspi2.ld"),),
     ),
     # No internal flash at all: the template is ST's load-and-run script, which
     # runs the whole image out of AXISRAM, and already carries _sstack.
@@ -306,8 +313,11 @@ def main():
 
     for family in args.families:
         conf = FAMILIES[family]
-        with open(os.path.join(TEMPLATES_DIR, conf.template)) as handle:
-            template = handle.read()
+        templates = {}
+        for name in [conf.template] + [t for _, t in conf.variants]:
+            with open(os.path.join(TEMPLATES_DIR, name)) as handle:
+                templates[name] = handle.read()
+        template = templates[conf.template]
 
         scripts = {}
         for part, flash, ram_total in read_devices(targets_xml, family, conf):
@@ -331,7 +341,8 @@ def main():
                 )]
             elif conf.style == "subfamily":
                 produced = [
-                    (part.upper() + conf.suffix, render_device(template, part))
+                    (part.upper() + suffix, render_device(templates[t], part))
+                    for suffix, t in ((conf.suffix, conf.template),) + conf.variants
                 ]
             else:
                 produced = [(
